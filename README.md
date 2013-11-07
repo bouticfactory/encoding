@@ -14,4 +14,5 @@ To install encoding::
     go get github.com/bouticfactory/encoding
 
 You should then import one of the packages like::
+
     import "github.com/bouticfactory/encoding/macroman"
