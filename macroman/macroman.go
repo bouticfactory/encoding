@@ -1,16 +1,8 @@
-// Copyright 2013 outofpluto.com. All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
-
-// Package macroman implements the MacRomanEncoding data encoding
-// as used in Adobe's PostScript and PDF document formats.
-// https://www.adobe.com/devnet/pdf/pdf_reference.html
 package macroman
 
 import (
 	"io"
  	"unicode/utf8"
-// 	"strconv"
 )
 
 /*
@@ -477,8 +469,9 @@ var macromantoutf8 map[byte]rune = map[byte]rune {
  * Encoder
  */
 
-// Encode encodes src into at most utf8.RunCount(src)
+// encodes src into at most utf8.RunCount(src)
 // bytes of dst, returning the actual number of bytes written.
+// src must be utf-8 encoded
 func Encode(dst, src []byte) int {
 	if len(src) == 0 {
 		return 0
@@ -494,8 +487,9 @@ func Encode(dst, src []byte) int {
 	return l
 }
 
-// NewEncoder returns a new macroman stream encoder.  Data written to
+// returns a new macroman stream encoder.  Data written to
 // the returned writer will be encoded and then written to w.
+// Written streams must be utf-8 encoded
 func NewEncoder(w io.Writer) io.Writer { return &encoder{w: w} }
 
 const bufSize = 1024
@@ -533,138 +527,78 @@ func (e *encoder) Write(p []byte) (n int, err error) {
 	return n, nil
 }
 
-// /*
-//  * Decoder
-//  */
+/*
+ * Decoder
+ */
 
-// type CorruptInputError int64
+type DestinationTooSmall int64
 
-// func (e CorruptInputError) Error() string {
-// 	return "illegal ascii85 data at input byte " + strconv.FormatInt(int64(e), 10)
-// }
+func (e DestinationTooSmall) Error() string {
+	return "The destination is too small to contain the conversion"
+}
 
-// // Decode decodes src into dst, returning both the number
-// // of bytes written to dst and the number consumed from src.
-// // If src contains invalid ascii85 data, Decode will return the
-// // number of bytes successfully written and a CorruptInputError.
-// // Decode ignores space and control characters in src.
-// // Often, ascii85-encoded data is wrapped in <~ and ~> symbols.
-// // Decode expects these to have been stripped by the caller.
-// //
-// // If flush is true, Decode assumes that src represents the
-// // end of the input stream and processes it completely rather
-// // than wait for the completion of another 32-bit block.
-// //
-// // NewDecoder wraps an io.Reader interface around Decode.
-// //
-// func Decode(dst, src []byte, flush bool) (ndst, nsrc int, err error) {
-// 	var v uint32
-// 	var nb int
-// 	for i, b := range src {
-// 		if len(dst)-ndst < 4 {
-// 			return
-// 		}
-// 		switch {
-// 		case b <= ' ':
-// 			continue
-// 		case b == 'z' && nb == 0:
-// 			nb = 5
-// 			v = 0
-// 		case '!' <= b && b <= 'u':
-// 			v = v*85 + uint32(b-'!')
-// 			nb++
-// 		default:
-// 			return 0, 0, CorruptInputError(i)
-// 		}
-// 		if nb == 5 {
-// 			nsrc = i + 1
-// 			dst[ndst] = byte(v >> 24)
-// 			dst[ndst+1] = byte(v >> 16)
-// 			dst[ndst+2] = byte(v >> 8)
-// 			dst[ndst+3] = byte(v)
-// 			ndst += 4
-// 			nb = 0
-// 			v = 0
-// 		}
-// 	}
-// 	if flush {
-// 		nsrc = len(src)
-// 		if nb > 0 {
-// 			// The number of output bytes in the last fragment
-// 			// is the number of leftover input bytes - 1:
-// 			// the extra byte provides enough bits to cover
-// 			// the inefficiency of the encoding for the block.
-// 			if nb == 1 {
-// 				return 0, 0, CorruptInputError(len(src))
-// 			}
-// 			for i := nb; i < 5; i++ {
-// 				// The short encoding truncated the output value.
-// 				// We have to assume the worst case values (digit 84)
-// 				// in order to ensure that the top bits are correct.
-// 				v = v*85 + 84
-// 			}
-// 			for i := 0; i < nb-1; i++ {
-// 				dst[ndst] = byte(v >> 24)
-// 				v <<= 8
-// 				ndst++
-// 			}
-// 		}
-// 	}
-// 	return
-// }
+// decodes src into dst, returning both the number
+// of bytes written to dst and the number consumed from src.
+// the result string in dst is utf-8 encoded
+// if dst is not large enough, DestinationTooSmall is returned
+// and dst contains the nsrc characters from src that were
+// converted so far to ndst characters
+func Decode(dst, src []byte) (ndst, nsrc int, err error) {
+	if len(src) == 0 {
+		return 0, 0, nil
+	}
+	
+	nsrc, ndst = 0, 0
+	for len(src) > 0 {
+		r, found := macromantoutf8[src[0]]
+		if found {
+			if len(dst[ndst:]) < utf8.RuneLen(r) {
+				return ndst, nsrc, DestinationTooSmall(nsrc)
+			}
+			s := utf8.EncodeRune(dst[ndst:], r)
+			ndst += s
+		}
+		nsrc += 1
+		src = src[1:]
+	}
+	return ndst, nsrc, nil
+}
 
-// // NewDecoder constructs a new ascii85 stream decoder.
-// func NewDecoder(r io.Reader) io.Reader { return &decoder{r: r} }
+// NewDecoder constructs a new macroman stream decoder.
+//
+// NewDecoder wraps an io.Reader interface around Decode.
+func NewDecoder(r io.Reader) io.Reader { return &decoder{r: r} }
 
-// type decoder struct {
-// 	err     error
-// 	readErr error
-// 	r       io.Reader
-// 	end     bool      , // saw end of message
-// 	buf     [1024]byte, // leftover input
-// 	nbuf    int
-// 	out     []byte, // leftover decoded output
-// 	outbuf  [1024]byte
-// }
+type decoder struct {
+	err     error
+	readErr error
+	r       io.Reader
+	buf		[bufSize]byte
+	outbuf  [bufSize*2]byte
+	out     []byte
+}
 
-// func (d *decoder) Read(p []byte) (n int, err error) {
-// 	if len(p) == 0 {
-// 		return 0, nil
-// 	}
-// 	if d.err != nil {
-// 		return 0, d.err
-// 	}
+func (d *decoder) Read(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if d.err != nil {
+		return 0, d.err
+	}
 
-// 	for {
-// 		// Copy leftover output from last decode.
-// 		if len(d.out) > 0 {
-// 			n = copy(p, d.out)
-// 			d.out = d.out[n:]
-// 			return
-// 		}
-
-// 		// Decode leftover input from last read.
-// 		var nn, nsrc, ndst int
-// 		if d.nbuf > 0 {
-// 			ndst, nsrc, d.err = Decode(d.outbuf[0:], d.buf[0:d.nbuf], d.readErr != nil)
-// 			if ndst > 0 {
-// 				d.out = d.outbuf[0:ndst]
-// 				d.nbuf = copy(d.buf[0:], d.buf[nsrc:d.nbuf])
-// 				continue // copy out and return
-// 			}
-// 		}
-
-// 		// Out of input, out of decoded output.  Check errors.
-// 		if d.err != nil {
-// 			return 0, d.err
-// 		}
-// 		if d.readErr != nil {
-// 			d.err = d.readErr
-// 			return 0, d.err
-// 		}
-
-// 		// Read more data.
-// 		nn, d.readErr = d.r.Read(d.buf[d.nbuf:])
-// 		d.nbuf += nn
-// 	}
-// }
+	n = 0
+	nn := 0
+	for {
+		nn, d.readErr = d.r.Read(d.buf[:bufSize])
+		if nn == 0 {
+			copy(p, d.out)
+			return n, nil
+		}
+		nn, _, err := Decode(d.outbuf[0:], d.buf[:nn])
+		n += nn
+		if err != nil {
+			return n, err
+		}
+		d.out = append(d.out, d.outbuf[:nn]...)
+	}
+}

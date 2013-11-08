@@ -11,7 +11,7 @@ Source strings should be UTF-8
 Usage:
 
 func main() {
-     src := []byte("Caractères spéciaux ®")
+     src := []byte("Caractères spéciaux : ® et $")
      dst := make([]byte, len(src))
      macroman.Encode(dst, src)
 }
